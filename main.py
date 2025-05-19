@@ -1,36 +1,46 @@
-import paho.mqtt.client as mqtt
-from fastapi import FastAPI
+import asyncio
+import aiocoap.resource as resource
+from aiocoap.credentials import CredentialsMap, PreSharedKey
+import aiocoap
 
-app = FastAPI()
+import secret
 
-# MQTT config
-MQTT_BROKER = "localhost"
-MQTT_PORT = 1883
-MQTT_TOPIC = "iot/data"
+class GetPutResource(resource.Resource):
+    def __init__(self):
+        super().__init__()
+        self.set_content(b"Default Data (padded) ")
 
-def on_connect(client, userdata, flags, rc):
-    print("Connected to MQTT Broker!")
-    client.subscribe(MQTT_TOPIC)
+    def set_content(self, content):  # Заполнение
+        self.content = content
+        # while len(self.content) <= 1024:
+        #     self.content += b"0123456789\n"
 
-def on_message(client, userdata, msg):
-    payload = msg.payload.decode()
-    print(f"Received message: {payload} on topic {msg.topic}")
-    # Тут можно сохранять в базу, отправлять WebSocket и т.п.
+    async def render_get(self, request):  # Обработчик GET
+        print("[GET] Request received")
+        return aiocoap.Message(payload=self.content)
 
-mqtt_client = mqtt.Client()
-mqtt_client.on_connect = on_connect
-mqtt_client.on_message = on_message
-mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    async def render_put(self, request):  # Обработчик PUT
+        print("[PUT] Payload received:", request.payload)
+        self.set_content(request.payload)
+        return aiocoap.Message(code=aiocoap.CHANGED, payload=self.content)
 
-@app.on_event("startup")
-def start_mqtt():
-    mqtt_client.loop_start()
 
-@app.on_event("shutdown")
-def stop_mqtt():
-    mqtt_client.loop_stop()
-    mqtt_client.disconnect()
+async def main():
+    credentials = CredentialsMap()
+    credentials['coaps://*'] = PreSharedKey(secret.CLIENT, secret.CLIENT_KEY)
 
-@app.get("/")
-def read_root():
-    return {"message": "MQTT listener active"}
+    # Создание корневого ресурса
+    root = resource.Site()
+
+    # Ресурс для .well-known/core (для совместимости)
+    root.add_resource(('.well-known', 'core'), resource.WKCResource(root.get_resources_as_linkheader))
+
+    # Пользовательский ресурс
+    root.add_resource(('iot', 'api'), GetPutResource())
+
+    await aiocoap.Context.create_server_context(root, bind=("localhost", 5684), server_credentials=credentials)
+    print("🚀 CoAP server is running...")
+    await asyncio.get_running_loop().create_future()
+
+if __name__ == "__main__":
+    asyncio.run(main())
