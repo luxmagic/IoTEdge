@@ -1,44 +1,41 @@
-import asyncio
+import asyncio, aiocoap
 import aiocoap.resource as resource
-from aiocoap.credentials import CredentialsMap, PreSharedKey
-import aiocoap
-
+from aiocoap.credentials import CredentialsMap
+from shared_context import EncryptionContext
 import secret
 
-class GetPutResource(resource.Resource):
+class SecureResource(resource.Resource):
     def __init__(self):
-        super().__init__()
-        self.set_content(b"Default Data (padded) ")
+        self.server_context = EncryptionContext(
+            secret.MASTER_KEY, 
+            secret.SENDER_ID, 
+            secret.RECIPIENT_ID
+        )
+        self.content = "".encode()
 
-    def set_content(self, content):  # Заполнение
-        self.content = content
-        # while len(self.content) <= 1024:
-        #     self.content += b"0123456789\n"
+    def set_content(self, content):
+        self.content += content
 
-    async def render_get(self, request):  # Обработчик GET
+    async def render_get(self, request):
         print("[GET] Request received")
-        return aiocoap.Message(payload=self.content)
+        protected_payload = self.server_context.protect(self.content)
+        return aiocoap.Message(payload=protected_payload)
 
-    async def render_put(self, request):  # Обработчик PUT
-        print("[PUT] Payload received:", request.payload)
-        self.set_content(request.payload)
-        return aiocoap.Message(code=aiocoap.CHANGED, payload=self.content)
+    async def render_put(self, request):
+        unprotected_payload = self.server_context.unprotect(request.payload)
+        print("[PUT] Payload received:", unprotected_payload)
+        self.set_content(unprotected_payload)
+        protected_payload = self.server_context.protect(self.content)
+        return aiocoap.Message(code=aiocoap.CHANGED, payload=protected_payload)
 
 
 async def main():
-    credentials = CredentialsMap()
-    credentials['coaps://*'] = PreSharedKey(secret.CLIENT, secret.CLIENT_KEY)
-
-    # Создание корневого ресурса
     root = resource.Site()
-
-    # Ресурс для .well-known/core (для совместимости)
     root.add_resource(('.well-known', 'core'), resource.WKCResource(root.get_resources_as_linkheader))
 
-    # Пользовательский ресурс
-    root.add_resource(('iot', 'api'), GetPutResource())
+    root.add_resource(('iot', 'api'), SecureResource())
 
-    await aiocoap.Context.create_server_context(root, bind=("localhost", 5684), server_credentials=credentials)
+    await aiocoap.Context.create_server_context(root, bind=("localhost", 5683))
     print("🚀 CoAP server is running...")
     await asyncio.get_running_loop().create_future()
 
