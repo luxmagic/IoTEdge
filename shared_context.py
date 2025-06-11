@@ -1,6 +1,6 @@
 import secret, os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
+    
 class EncryptionContext:
     def __init__(self, key: bytes, sender_id: bytes, recipient_id: bytes):
         self.key = key
